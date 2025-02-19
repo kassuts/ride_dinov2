@@ -8,6 +8,9 @@ from itertools import repeat
 from collections import OrderedDict
 import numpy as np
 
+import torch.nn.functional as F
+import math
+
 import matplotlib.pyplot as plt
 
 # WARNING:
@@ -354,3 +357,52 @@ def learning_rate_scheduler(optimizer, config):
     else:
         lr_scheduler = None
     return lr_scheduler
+
+
+def fix_pos_embed(state_dict, model_dict, num_patches):
+    """
+    Fix position embedding dimension mismatch.
+    
+    Args:
+        state_dict (dict): Pretrained state dict
+        model_dict (dict): Current model state dict
+        num_patches (int): Number of patches in current model
+    """
+    pos_embed_key = 'pos_embed'
+    
+    if pos_embed_key not in state_dict:
+        return state_dict
+        
+    pos_embed_checkpoint = state_dict[pos_embed_key]
+    embedding_size = pos_embed_checkpoint.shape[-1]
+    num_extra_tokens = 1  # [CLS] token
+    
+    # First, separate class token and position embedding
+    cls_token_weight = pos_embed_checkpoint[:, 0:num_extra_tokens, :]
+    pos_embed_weight = pos_embed_checkpoint[:, num_extra_tokens:, :]
+    
+    # Get original grid size
+    orig_size = int(math.sqrt(pos_embed_weight.shape[1]))
+    
+    # Get new grid size
+    new_size = int(math.sqrt(num_patches))
+    
+    if orig_size != new_size:
+        print(f"Interpolating position embedding from {orig_size}x{orig_size} to {new_size}x{new_size}")
+        # Interpolate pos_embed_weight to new size
+        pos_embed_weight = pos_embed_weight.reshape(1, orig_size, orig_size, embedding_size).permute(0, 3, 1, 2)
+        pos_embed_weight = F.interpolate(
+            pos_embed_weight, 
+            size=(new_size, new_size), 
+            mode='bicubic', 
+            align_corners=False
+        )
+        pos_embed_weight = pos_embed_weight.permute(0, 2, 3, 1).flatten(1, 2)
+        
+        # Concatenate class token with position embedding
+        new_pos_embed = torch.cat((cls_token_weight, pos_embed_weight), dim=1)
+        
+        # Update state dict
+        state_dict[pos_embed_key] = new_pos_embed
+        
+    return state_dict
