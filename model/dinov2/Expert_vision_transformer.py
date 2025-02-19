@@ -100,18 +100,31 @@ class RIDEDinoVisionTransformer(nn.Module):
         if 'state_dict' in state_dict:
             state_dict = state_dict['state_dict']
             
-        # Calculate number of patches
+        # Handle img_size and patch_size which could be int or tuple
         img_size = self.base_transformer.patch_embed.img_size
         patch_size = self.base_transformer.patch_embed.patch_size
-        num_patches = (img_size[0] // patch_size) * (img_size[1] // patch_size)
-        
+
+        # Convert to integers if they're tuples
+        if isinstance(img_size, tuple):
+            img_h, img_w = img_size
+        else:
+            img_h = img_w = img_size
+            
+        if isinstance(patch_size, tuple):
+            patch_h, patch_w = patch_size
+        else:
+            patch_h = patch_w = patch_size
+
+        # Calculate number of patches
+        num_patches = (img_h // patch_h) * (img_w // patch_w)
+
         # Fix position embedding
         state_dict = fix_pos_embed(
             state_dict, 
             self.base_transformer.state_dict(),
             num_patches
         )
-        
+
         # Filter state dict to only include base transformer keys
         base_state_dict = {}
         for key, value in state_dict.items():
@@ -126,7 +139,7 @@ class RIDEDinoVisionTransformer(nn.Module):
         msg = self.base_transformer.load_state_dict(base_state_dict, strict=False)
         print(f"Loaded pretrained weights for base transformer (layers 0-{self.expert_start_layer})")
         print(f"Loading message: {msg}")
-                    
+
     def freeze_base_transformer(self):
         """Freeze all parameters in the base transformer"""
         for param in self.base_transformer.parameters():
