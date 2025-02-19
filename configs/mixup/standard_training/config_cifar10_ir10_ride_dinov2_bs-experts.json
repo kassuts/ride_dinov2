@@ -10,7 +10,7 @@
             "use_norm": true,
             "returns_feat": true,
             "num_experts": 3,
-            "pretrained_path": "/content/ride_dinov2/dinov2_vits14_pretrain.pth" 
+            "pretrained_path": "/content/dinov2_vits14_pretrain.pth" 
         }
     },
     "data_loader": {

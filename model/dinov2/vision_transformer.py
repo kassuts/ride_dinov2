@@ -16,7 +16,6 @@ import torch
 import torch.nn as nn
 import torch.utils.checkpoint
 from torch.nn.init import trunc_normal_
-/Users/eitankassuto/projects/ride_dinov2/model/dinov2/layers/layers
 from model.dinov2.layers.layers import Mlp, PatchEmbed, SwiGLUFFNFused, MemEffAttention, NestedTensorBlock as Block
 
 
