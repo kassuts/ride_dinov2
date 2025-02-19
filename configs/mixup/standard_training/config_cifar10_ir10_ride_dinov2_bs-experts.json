@@ -6,8 +6,6 @@
         "type": "DINOv2Model",
         "args": {
             "num_classes": 10,
-            "reduce_dimension": false,
-            "use_norm": true,
             "returns_feat": true,
             "num_experts": 3,
             "pretrained_path": "/content/dinov2_vits14_pretrain.pth" 
