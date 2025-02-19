@@ -186,6 +186,18 @@ class RIDEDinoVisionTransformer(nn.Module):
             }
         else:
             return final_out
+    
+    def _hook_before_iter(self):
+        assert self.training, "_hook_before_iter should be called at training time only, after train() is called"
+        count = 0
+        for module in self.modules():
+            if isinstance(module, nn.BatchNorm2d):
+                if module.weight.requires_grad == False:
+                    module.eval()
+                    count += 1
+
+        if count > 0:
+            print("Warning: detected at least one frozen BN, set them to eval state. Count:", count)
 
 def ride_dino_small(pretrained_path=None, num_experts=3, num_classes=1000, **kwargs):
     model = RIDEDinoVisionTransformer(
