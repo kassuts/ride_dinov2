@@ -150,7 +150,7 @@ class ResNeXt152Model(Model):
             self.backbone = Expert_ResNeXt.ResNext(Expert_ResNeXt.Bottleneck, [3, 8, 36, 3], groups=32, width_per_group=4, dropout=None, num_classes=num_classes, reduce_dimension=reduce_dimension, layer3_output_dim=layer3_output_dim, layer4_output_dim=layer4_output_dim, num_experts=num_experts)
 
 class DINOv2Model(Model):
-    def __init__(self, num_classes,  patch_size=16, embed_dim=384, depth=12, num_heads=6, mlp_ratio=4, num_experts=1, returns_feat=True, expert_start_layer=10, pretrained_path=None):
+    def __init__(self, num_classes,  patch_size=14, embed_dim=384, depth=12, num_heads=6, mlp_ratio=4, num_experts=1, returns_feat=True, expert_start_layer=10, pretrained_path=None):
         super().__init__(num_classes, patch_size, embed_dim, depth, num_heads, mlp_ratio, num_experts, pretrained_path)
         if num_experts == 1:
             self.backbone = vision_transformer.DinoVisionTransformer(patch_size, embed_dim, depth, num_heads, mlp_ratio, num_classes, pretrained_path)
