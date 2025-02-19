@@ -7,6 +7,7 @@ from typing import Union, Sequence, Tuple
 from model.dinov2.layers.layers.attention import MemEffAttention
 from model.dinov2.layers.layers.block import Block
 from model.dinov2.vision_transformer import DinoVisionTransformer
+from utils.util import fix_pos_embed
 
 class RIDEDinoVisionTransformer(nn.Module):
     def __init__(
@@ -96,6 +97,20 @@ class RIDEDinoVisionTransformer(nn.Module):
     def load_pretrained_weights(self, pretrained_path):
         """Load pretrained DINOv2 weights and handle key matching"""
         state_dict = torch.load(pretrained_path, map_location='cpu')
+        if 'state_dict' in state_dict:
+            state_dict = state_dict['state_dict']
+            
+        # Calculate number of patches
+        img_size = self.base_transformer.patch_embed.img_size
+        patch_size = self.base_transformer.patch_embed.patch_size
+        num_patches = (img_size[0] // patch_size) * (img_size[1] // patch_size)
+        
+        # Fix position embedding
+        state_dict = fix_pos_embed(
+            state_dict, 
+            self.base_transformer.state_dict(),
+            num_patches
+        )
         
         # Filter state dict to only include base transformer keys
         base_state_dict = {}
@@ -108,9 +123,10 @@ class RIDEDinoVisionTransformer(nn.Module):
             base_state_dict[key] = value
             
         # Load weights into base transformer
-        self.base_transformer.load_state_dict(base_state_dict, strict=False)
+        msg = self.base_transformer.load_state_dict(base_state_dict, strict=False)
         print(f"Loaded pretrained weights for base transformer (layers 0-{self.expert_start_layer})")
-            
+        print(f"Loading message: {msg}")
+                    
     def freeze_base_transformer(self):
         """Freeze all parameters in the base transformer"""
         for param in self.base_transformer.parameters():
