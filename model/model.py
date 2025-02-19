@@ -151,7 +151,7 @@ class ResNeXt152Model(Model):
 
 class DINOv2Model(Model):
     def __init__(self, num_classes,  patch_size=14, embed_dim=384, depth=12, num_heads=6, mlp_ratio=4, num_experts=1, returns_feat=True, expert_start_layer=10, pretrained_path=None):
-        super().__init__(num_classes, patch_size, embed_dim, depth, num_heads, mlp_ratio, num_experts, pretrained_path)
+        super().__init__(num_classes, None)
         if num_experts == 1:
             self.backbone = vision_transformer.DinoVisionTransformer(patch_size, embed_dim, depth, num_heads, mlp_ratio, num_classes, pretrained_path)
         else:
