@@ -17,7 +17,7 @@
         "type": "ImbalanceCIFAR10DataLoader",
         "args":{
             "data_dir": "./data/CIFAR-10",
-            "batch_size": 64,
+            "batch_size": 16,
             "shuffle": true,
             "num_workers": 4,
             "imb_factor": 0.1,
