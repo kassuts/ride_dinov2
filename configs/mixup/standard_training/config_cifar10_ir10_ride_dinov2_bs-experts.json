@@ -5,6 +5,8 @@
     "arch": {
         "type": "DINOv2Model",
         "args": {
+            "img_size": 518,
+            "patch_size": 14,
             "num_classes": 10,
             "returns_feat": true,
             "num_experts": 3,
