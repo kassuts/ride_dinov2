@@ -34,7 +34,7 @@ class RIDEDinoVisionTransformer(nn.Module):
         super().__init__()
         
         self.resize = nn.Sequential(
-        nn.Upsample(size=(518, 518), mode='bicubic', align_corners=False),
+        nn.Upsample(size=(img_size, img_size), mode='bicubic', align_corners=False),
         nn.Conv2d(3, 3, 1, 1, 0)  # Optional: add a conv layer to better handle upscaled features
     )
         self.num_experts = num_experts
@@ -168,8 +168,9 @@ class RIDEDinoVisionTransformer(nn.Module):
         
     def forward(self, x):
         with autocast():
+            # Resize input image
+            x = self.resize(x)
             # Process through base transformer (frozen)
-            self.resize(x)
             with torch.no_grad():  # No gradients for base transformer
                 base_features = self.base_transformer.prepare_tokens_with_masks(x)
                 for blk in self.base_transformer.blocks:
