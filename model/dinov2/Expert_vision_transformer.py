@@ -12,7 +12,7 @@ from utils.util import fix_pos_embed
 class RIDEDinoVisionTransformer(nn.Module):
     def __init__(
         self,
-        img_size=224,
+        img_size=518,
         patch_size=16,
         in_chans=3,
         num_classes=1000,
@@ -33,6 +33,10 @@ class RIDEDinoVisionTransformer(nn.Module):
     ):
         super().__init__()
         
+        self.resize = nn.Sequential(
+        nn.Upsample(size=(518, 518), mode='bicubic', align_corners=False),
+        nn.Conv2d(3, 3, 1, 1, 0)  # Optional: add a conv layer to better handle upscaled features
+    )
         self.num_experts = num_experts
         self.returns_feat = returns_feat
         self.use_dropout = True if dropout else False
@@ -164,6 +168,8 @@ class RIDEDinoVisionTransformer(nn.Module):
         
     def forward(self, x):
         with autocast():
+            # Process through base transformer (frozen)
+            self.resize(x)
             with torch.no_grad():  # No gradients for base transformer
                 base_features = self.base_transformer.prepare_tokens_with_masks(x)
                 for blk in self.base_transformer.blocks:

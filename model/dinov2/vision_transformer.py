@@ -43,7 +43,7 @@ class BlockChunk(nn.ModuleList):
 class DinoVisionTransformer(nn.Module):
     def __init__(
         self,
-        img_size=224,
+        img_size=518,
         patch_size=16,
         in_chans=3,
         embed_dim=768,
