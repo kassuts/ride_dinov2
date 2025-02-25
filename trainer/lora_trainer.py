@@ -36,6 +36,11 @@ class LoRATrainer(Trainer):
         
         # Override PEFT's forward to handle vision inputs
         def new_forward(self, x):
+            # Ensure input is on the same device as model
+            device = next(self.parameters()).device
+            if x.device != device:
+                x = x.to(device)
+            
             # Ensure we're accessing the correct model
             if hasattr(self.base_model, 'model'):
                 return self.base_model.model(x)
@@ -54,6 +59,43 @@ class LoRATrainer(Trainer):
         super().__init__(model, criterion, metric_ftns, optimizer, config, data_loader, 
                         combiner, finetuning_combiner, valid_data_loader, val_criterion,
                         lr_scheduler, len_epoch, save_imgs)
+        
+        # Make sure all parts of the model are on the same device
+        self._ensure_model_on_device()
+
+    def _ensure_model_on_device(self):
+        """Make sure all model components are on the same device"""
+        if self.device.type != 'cpu':
+            print(f"Moving model to {self.device}...")
+            
+            # First move the entire model to device
+            self.model = self.model.to(self.device)
+            
+            # Then ensure the base model is also on the device
+            if hasattr(self, 'base_model'):
+                self.base_model = self.base_model.to(self.device)
+            
+            # For LoRA adapters, we need to check each parameter and buffer explicitly
+            for name, param in self.model.named_parameters():
+                if param.device.type != self.device.type:
+                    print(f"Moving parameter {name} from {param.device} to {self.device}")
+                    param.data = param.data.to(self.device)
+            
+            for name, buffer in self.model.named_buffers():
+                if buffer.device.type != self.device.type:
+                    print(f"Moving buffer {name} from {buffer.device} to {self.device}")
+                    buffer.data = buffer.data.to(self.device)
+            
+            # Handle specific modules separately (like patch embedding)
+            for module in self.model.modules():
+                if hasattr(module, 'proj') and hasattr(module.proj, 'weight'):
+                    if module.proj.weight.device.type != self.device.type:
+                        print(f"Moving proj weights from {module.proj.weight.device} to {self.device}")
+                        module.proj.weight.data = module.proj.weight.data.to(self.device)
+                        if hasattr(module.proj, 'bias') and module.proj.bias is not None:
+                            module.proj.bias.data = module.proj.bias.data.to(self.device)
+            
+            print(f"Verified all model components are on {self.device}")
 
     def _train_epoch(self, epoch):
         """
@@ -62,6 +104,10 @@ class LoRATrainer(Trainer):
         self.model.train()
         if hasattr(self.base_model, '_hook_before_iter'):
             self.base_model._hook_before_iter()
+            
+        # Double-check device placement at the beginning of each epoch
+        self._ensure_model_on_device()
+            
         return super()._train_epoch(epoch)
 
     def _save_checkpoint(self, epoch, save_best=False):
