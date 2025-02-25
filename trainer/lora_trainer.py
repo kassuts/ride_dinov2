@@ -17,8 +17,43 @@ class LoRATrainer(Trainer):
         
         # Move the base model to the device first
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.base_model = self.base_model.to(device)
-
+        print(f"Moving model to {device}...")
+        
+        # Explicitly move all model components to device BEFORE LoRA adaptation
+        def ensure_device_recursive(module, device):
+            """Recursively move all module parameters and buffers to device"""
+            for param in module.parameters(recurse=False):
+                if param.device != device:
+                    print(f"Moving parameter of shape {param.shape} from {param.device} to {device}")
+                    param.data = param.data.to(device)
+            
+            for buf in module.buffers(recurse=False):
+                if buf.device != device:
+                    print(f"Moving buffer of shape {buf.shape} from {buf.device} to {device}")
+                    buf.data = buf.data.to(device)
+            
+            # Move module itself
+            module.to(device)
+            
+            # Recursively handle children
+            for name, child in module.named_children():
+                ensure_device_recursive(child, device)
+            
+            return module
+        
+        # Move ALL components to device before LoRA adaptation
+        self.base_model = ensure_device_recursive(self.base_model, device)
+        
+        # Verify all components are on the correct device
+        on_device = True
+        for name, param in self.base_model.named_parameters():
+            if param.device != device:
+                print(f"ERROR: Parameter {name} still on {param.device} instead of {device}")
+                on_device = False
+        
+        if on_device:
+            print(f"Verified all model components are on {device}")
+        
         # Setup LoRA configuration
         lora_config = config['lora']
         peft_config = LoraConfig(
@@ -29,104 +64,102 @@ class LoRATrainer(Trainer):
             lora_dropout=lora_config.get('dropout', 0.1),
             target_modules=lora_config.get('target_modules', [
                 "qkv",
-                "proj",
+                "proj", 
                 "fc1",
                 "fc2"
             ]),
             bias=lora_config.get('bias', 'none'),
         )
-
+        
         # Apply LoRA to the model
         model = get_peft_model(model, peft_config)
         
-        # Explicitly move all model parts to the device
-        model = model.to(device)
+        # Move LoRA model to device
+        model = ensure_device_recursive(model, device)
         
-        # Ensure patch_embed is explicitly moved to device
-        if hasattr(model, 'patch_embed'):
-            model.patch_embed = model.patch_embed.to(device)
-            if hasattr(model.patch_embed, 'proj'):
-                model.patch_embed.proj = model.patch_embed.proj.to(device)
-                
-        # If the model has a backbone with patch_embed
-        if hasattr(model, 'backbone') and hasattr(model.backbone, 'patch_embed'):
-            model.backbone.patch_embed = model.backbone.patch_embed.to(device)
-            if hasattr(model.backbone.patch_embed, 'proj'):
-                model.backbone.patch_embed.proj = model.backbone.patch_embed.proj.to(device)
-        
-        # Define a custom forward method for the wrapped model
-        original_forward = model.forward
-        def new_forward(self, x):
-            # Ensure input is on the right device
-            if x.device != next(self.parameters()).device:
-                x = x.to(next(self.parameters()).device)
+        # Create a custom forward method to bypass PEFT's text-specific logic
+        def custom_forward(self, x):
+            # Ensure input tensor is on the correct device
+            if x.device != device:
+                x = x.to(device)
             
-            if hasattr(self, 'base_model'):
-                # Pass directly to backbone for vision models
-                if hasattr(self.base_model, 'backbone'):
-                    return self.base_model(x)
-                else:
-                    return self.base_model(x)
-            else:
-                # Fallback
-                return original_forward(x)
+            # Call the base model's forward directly
+            return self.base_model(x)
         
         # Bind the new forward method to the model
-        model.forward = types.MethodType(new_forward, model)
+        model.forward = types.MethodType(custom_forward, model)
         
         # Print trainable parameters
         print("\nTrainable parameters:")
-        model.print_trainable_parameters()
+        if hasattr(model, 'print_trainable_parameters'):
+            model.print_trainable_parameters()
+        else:
+            for name, param in model.named_parameters():
+                if param.requires_grad:
+                    print(f"{name}: {param.shape}")
         
         # Create optimizer after LoRA adaptation
         optimizer = config.init_obj('optimizer', torch.optim, model.parameters())
-
-        super().__init__(model, criterion, metric_ftns, optimizer, config, data_loader, 
-                        combiner, finetuning_combiner, valid_data_loader, val_criterion,
-                        lr_scheduler, len_epoch, save_imgs)
         
-        # Double-check device placement for all model components
-        self._ensure_model_on_device()
-    
-    def _ensure_model_on_device(self):
-        """Make sure all model components are on the same device"""
-        if self.device.type != 'cpu':
-            print(f"Moving all model components to {self.device}...")
-            
-            # First move the entire model to device
-            self.model = self.model.to(self.device)
-            
-            # Then ensure the base model is also on the device
-            if hasattr(self, 'base_model'):
-                self.base_model = self.base_model.to(self.device)
-                
-                # Explicitly move backbone if it exists
-                if hasattr(self.base_model, 'backbone'):
-                    self.base_model.backbone = self.base_model.backbone.to(self.device)
-                    
-                    # Explicitly move patch embed
-                    if hasattr(self.base_model.backbone, 'patch_embed'):
-                        self.base_model.backbone.patch_embed = self.base_model.backbone.patch_embed.to(self.device)
-                        
-                        # Explicitly move the projection layer
-                        if hasattr(self.base_model.backbone.patch_embed, 'proj'):
-                            self.base_model.backbone.patch_embed.proj = self.base_model.backbone.patch_embed.proj.to(self.device)
-            
-            # For LoRA adapters, check each parameter and buffer explicitly
-            for name, module in self.model.named_modules():
-                module.to(self.device)
-                
-            print(f"All model components moved to {self.device}")
-
+        # Initialize parent class
+        super().__init__(model, criterion, metric_ftns, optimizer, config, data_loader, 
+                         combiner, finetuning_combiner, valid_data_loader, val_criterion,
+                         lr_scheduler, len_epoch, save_imgs)
+        
+        # Final device check after parent initialization
+        print(f"Moving model to {self.device}...")
+        self.model = ensure_device_recursive(self.model, self.device)
+        
+        # Verify one last time
+        on_device = True
+        for name, param in self.model.named_parameters():
+            if param.device != self.device:
+                print(f"ERROR: After initialization, parameter {name} still on {param.device}")
+                on_device = False
+        
+        if on_device:
+            print(f"Verified all model components are on {self.device}")
+        
     def _train_epoch(self, epoch):
         """Training logic for an epoch"""
+        # Double check device placement before training
+        device = self.device
+        
+        def check_device_recursive(module, prefix=""):
+            """Check if all parameters and buffers are on the expected device"""
+            all_on_device = True
+            
+            for name, param in module.named_parameters(recurse=False):
+                full_name = f"{prefix}.{name}" if prefix else name
+                if param.device != device:
+                    print(f"Moving {full_name} from {param.device} to {device}")
+                    param.data = param.data.to(device)
+                    all_on_device = False
+            
+            for name, buf in module.named_buffers(recurse=False):
+                full_name = f"{prefix}.{name}" if prefix else name
+                if buf.device != device:
+                    print(f"Moving buffer {full_name} from {buf.device} to {device}")
+                    buf.data = buf.data.to(device)
+                    all_on_device = False
+            
+            # Recursively check children
+            for name, child in module.named_children():
+                child_prefix = f"{prefix}.{name}" if prefix else name
+                child_result = check_device_recursive(child, child_prefix)
+                all_on_device = all_on_device and child_result
+            
+            return all_on_device
+        
+        # Check and fix device placement for all modules
+        all_on_device = check_device_recursive(self.model)
+        if all_on_device:
+            print(f"All model parameters confirmed on {device} before epoch {epoch}")
+        
         self.model.train()
         if hasattr(self.base_model, '_hook_before_iter'):
             self.base_model._hook_before_iter()
-            
-        # Double-check device placement at the beginning of each epoch
-        self._ensure_model_on_device()
-            
+        
         return super()._train_epoch(epoch)
 
     def _save_checkpoint(self, epoch, save_best=False):
