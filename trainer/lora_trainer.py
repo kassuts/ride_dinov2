@@ -1,4 +1,5 @@
 import torch
+import types
 from peft import get_peft_model, LoraConfig, TaskType
 from .trainer import Trainer
 
@@ -13,6 +14,10 @@ class LoRATrainer(Trainer):
         
         # Store original model
         self.base_model = model
+        
+        # Move the base model to the device first
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.base_model = self.base_model.to(device)
 
         # Setup LoRA configuration
         lora_config = config['lora']
@@ -23,10 +28,10 @@ class LoRATrainer(Trainer):
             lora_alpha=lora_config.get('alpha', 16),
             lora_dropout=lora_config.get('dropout', 0.1),
             target_modules=lora_config.get('target_modules', [
-                "attn.qkv",
-                "attn.proj",
-                "mlp.fc1",
-                "mlp.fc2"
+                "qkv",
+                "proj",
+                "fc1",
+                "fc2"
             ]),
             bias=lora_config.get('bias', 'none'),
         )
@@ -34,25 +39,45 @@ class LoRATrainer(Trainer):
         # Apply LoRA to the model
         model = get_peft_model(model, peft_config)
         
-        # Override PEFT's forward to handle vision inputs
+        # Explicitly move all model parts to the device
+        model = model.to(device)
+        
+        # Ensure patch_embed is explicitly moved to device
+        if hasattr(model, 'patch_embed'):
+            model.patch_embed = model.patch_embed.to(device)
+            if hasattr(model.patch_embed, 'proj'):
+                model.patch_embed.proj = model.patch_embed.proj.to(device)
+                
+        # If the model has a backbone with patch_embed
+        if hasattr(model, 'backbone') and hasattr(model.backbone, 'patch_embed'):
+            model.backbone.patch_embed = model.backbone.patch_embed.to(device)
+            if hasattr(model.backbone.patch_embed, 'proj'):
+                model.backbone.patch_embed.proj = model.backbone.patch_embed.proj.to(device)
+        
+        # Define a custom forward method for the wrapped model
+        original_forward = model.forward
         def new_forward(self, x):
-            # Ensure input is on the same device as model
-            device = next(self.parameters()).device
-            if x.device != device:
-                x = x.to(device)
+            # Ensure input is on the right device
+            if x.device != next(self.parameters()).device:
+                x = x.to(next(self.parameters()).device)
             
-            # Ensure we're accessing the correct model
-            if hasattr(self.base_model, 'model'):
-                return self.base_model.model(x)
+            if hasattr(self, 'base_model'):
+                # Pass directly to backbone for vision models
+                if hasattr(self.base_model, 'backbone'):
+                    return self.base_model(x)
+                else:
+                    return self.base_model(x)
             else:
-                return self.base_model(x)
+                # Fallback
+                return original_forward(x)
         
-        model.forward = new_forward.__get__(model, type(model))
+        # Bind the new forward method to the model
+        model.forward = types.MethodType(new_forward, model)
         
-        # Print trainable parameters to verify LoRA application
+        # Print trainable parameters
         print("\nTrainable parameters:")
         model.print_trainable_parameters()
-
+        
         # Create optimizer after LoRA adaptation
         optimizer = config.init_obj('optimizer', torch.optim, model.parameters())
 
@@ -60,13 +85,13 @@ class LoRATrainer(Trainer):
                         combiner, finetuning_combiner, valid_data_loader, val_criterion,
                         lr_scheduler, len_epoch, save_imgs)
         
-        # Make sure all parts of the model are on the same device
+        # Double-check device placement for all model components
         self._ensure_model_on_device()
-
+    
     def _ensure_model_on_device(self):
         """Make sure all model components are on the same device"""
         if self.device.type != 'cpu':
-            print(f"Moving model to {self.device}...")
+            print(f"Moving all model components to {self.device}...")
             
             # First move the entire model to device
             self.model = self.model.to(self.device)
@@ -74,33 +99,27 @@ class LoRATrainer(Trainer):
             # Then ensure the base model is also on the device
             if hasattr(self, 'base_model'):
                 self.base_model = self.base_model.to(self.device)
+                
+                # Explicitly move backbone if it exists
+                if hasattr(self.base_model, 'backbone'):
+                    self.base_model.backbone = self.base_model.backbone.to(self.device)
+                    
+                    # Explicitly move patch embed
+                    if hasattr(self.base_model.backbone, 'patch_embed'):
+                        self.base_model.backbone.patch_embed = self.base_model.backbone.patch_embed.to(self.device)
+                        
+                        # Explicitly move the projection layer
+                        if hasattr(self.base_model.backbone.patch_embed, 'proj'):
+                            self.base_model.backbone.patch_embed.proj = self.base_model.backbone.patch_embed.proj.to(self.device)
             
-            # For LoRA adapters, we need to check each parameter and buffer explicitly
-            for name, param in self.model.named_parameters():
-                if param.device.type != self.device.type:
-                    print(f"Moving parameter {name} from {param.device} to {self.device}")
-                    param.data = param.data.to(self.device)
-            
-            for name, buffer in self.model.named_buffers():
-                if buffer.device.type != self.device.type:
-                    print(f"Moving buffer {name} from {buffer.device} to {self.device}")
-                    buffer.data = buffer.data.to(self.device)
-            
-            # Handle specific modules separately (like patch embedding)
-            for module in self.model.modules():
-                if hasattr(module, 'proj') and hasattr(module.proj, 'weight'):
-                    if module.proj.weight.device.type != self.device.type:
-                        print(f"Moving proj weights from {module.proj.weight.device} to {self.device}")
-                        module.proj.weight.data = module.proj.weight.data.to(self.device)
-                        if hasattr(module.proj, 'bias') and module.proj.bias is not None:
-                            module.proj.bias.data = module.proj.bias.data.to(self.device)
-            
-            print(f"Verified all model components are on {self.device}")
+            # For LoRA adapters, check each parameter and buffer explicitly
+            for name, module in self.model.named_modules():
+                module.to(self.device)
+                
+            print(f"All model components moved to {self.device}")
 
     def _train_epoch(self, epoch):
-        """
-        Training logic for an epoch
-        """
+        """Training logic for an epoch"""
         self.model.train()
         if hasattr(self.base_model, '_hook_before_iter'):
             self.base_model._hook_before_iter()
@@ -111,9 +130,7 @@ class LoRATrainer(Trainer):
         return super()._train_epoch(epoch)
 
     def _save_checkpoint(self, epoch, save_best=False):
-        """
-        Saving LoRA checkpoints
-        """
+        """Saving LoRA checkpoints"""
         arch = type(self.base_model).__name__
         state = {
             'arch': arch,
