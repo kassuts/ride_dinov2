@@ -11,7 +11,7 @@
             "returns_feat": true,
             "num_experts": 1,
             "embed_dim": 384,
-            "pretrained_path": "/Users/eitankassuto/Downloads/dinov2_vits14_pretrain.pth"
+            "pretrained_path": "/content/dinov2_vits14_pretrain.pth"
         }
     },
     "data_loader": {

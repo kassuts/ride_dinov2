@@ -22,3 +22,10 @@ def top_k_acc(output, target, k=5, return_length=False):
         return correct / len(target), len(target)
     else:
         return correct / len(target)
+
+# Add these aliases to ensure validation metrics are recognized
+def val_accuracy(output, target, return_length=False):
+    return accuracy(output, target, return_length)
+
+def val_top_k_acc(output, target, k=5, return_length=False):
+    return top_k_acc(output, target, k, return_length)
