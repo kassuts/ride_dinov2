@@ -14,10 +14,11 @@ import model.model as module_arch
 import utils.combiner as module_combiner
 from parse_config import ConfigParser
 from trainer import Trainer
+from trainer.lora_trainer import LoRATrainer
 from utils import write_json, parse_tau_list, seed_everything, learning_rate_scheduler
 
 
-def main(config):
+def main(config, args):
     logger = config.get_logger('train')
 
     # setup data_loader instances
@@ -36,14 +37,12 @@ def main(config):
         extra_parameters["num_experts"] = config["arch"]["args"]["num_experts"]
 
     criterion = config.init_obj('loss', module_loss, cls_num_list=data_loader.cls_num_list, **extra_parameters)
-
     metrics = [getattr(module_metric, met) for met in config['metrics']]
 
-    # build optimizer, learning rate scheduler.
-    optimizer = config.init_obj('optimizer', torch.optim, model.parameters())
-    lr_scheduler = learning_rate_scheduler(optimizer, config)
-
-    combiner = config.init_obj('combiner', module_combiner, cfg=config)
+    # Initialize combiner only if it's in config (not used for LoRA)
+    combiner = None
+    if 'combiner' in config.config:
+        combiner = config.init_obj('combiner', module_combiner, cfg=config)
 
     finetuning_combiner = None
     try:
@@ -57,11 +56,23 @@ def main(config):
         else:
             print('Finetuning disabled.')
 
-    trainer = Trainer(model, criterion, metrics, optimizer,
-                      config, data_loader, combiner,
-                      finetuning_combiner=finetuning_combiner,
-                      valid_data_loader=valid_data_loader,
-                      lr_scheduler=lr_scheduler)
+    # Select trainer based on args
+    trainer_class = LoRATrainer if args.trainer == "LoRATrainer" else Trainer
+    
+    if args.trainer == "LoRATrainer":
+        # For LoRA, let the trainer handle optimizer creation after model adaptation
+        optimizer = None
+    else:
+        # For regular training, create optimizer here
+        optimizer = config.init_obj('optimizer', torch.optim, model.parameters())
+    
+    lr_scheduler = None if optimizer is None else learning_rate_scheduler(optimizer, config)
+
+    trainer = trainer_class(model, criterion, metrics, optimizer,
+                          config, data_loader, combiner,
+                          finetuning_combiner=finetuning_combiner,
+                          valid_data_loader=valid_data_loader,
+                          lr_scheduler=lr_scheduler)
 
     trainer.train()
 
@@ -80,7 +91,8 @@ if __name__ == '__main__':
                       help='random seed (default: 1)')
     args.add_argument("--val", "--validate", dest="validate", action="store_true", default=False,
                       help="Run validation (default: False).")
-
+    args.add_argument("--trainer", type=str, default="Trainer",
+                      help="Trainer class to use (default: Trainer)")
     args.add_argument("--use-wandb", dest="use_wandb", action="store_true", default=False,
                       help="Use wandb logger (Requires wandb installed and an API key)")
 
@@ -143,4 +155,4 @@ if __name__ == '__main__':
     if deterministic:
         seed_everything(args.seed)
 
-    main(config)
+    main(config, args)

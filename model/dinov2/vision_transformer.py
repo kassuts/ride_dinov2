@@ -64,6 +64,7 @@ class DinoVisionTransformer(nn.Module):
         num_register_tokens=0,
         interpolate_antialias=False,
         interpolate_offset=0.1,
+        pretrained_path=None,  # Added pretrained path parameter
     ):
         """
         Args:
@@ -168,6 +169,10 @@ class DinoVisionTransformer(nn.Module):
 
         self.init_weights()
 
+        # Load pretrained weights if provided
+        if pretrained_path:
+            self.load_pretrained_weights(pretrained_path)
+
     def init_weights(self):
         trunc_normal_(self.pos_embed, std=0.02)
         nn.init.normal_(self.cls_token, std=1e-6)
@@ -211,22 +216,39 @@ class DinoVisionTransformer(nn.Module):
 
     def prepare_tokens_with_masks(self, x, masks=None):
         B, nc, w, h = x.shape
+        # Handle the case for RGB images (3 channels)
+        if self.patch_embed.proj.in_channels != nc:
+            # Create a new projection layer that accepts the input channels
+            old_proj = self.patch_embed.proj
+            in_dim = nc  # Usually 3 for RGB images
+            self.patch_embed.proj = nn.Conv2d(
+                in_dim, old_proj.out_channels, 
+                kernel_size=old_proj.kernel_size, 
+                stride=old_proj.stride,
+                padding=old_proj.padding
+            )
+            # Copy weights for first channels if possible
+            with torch.no_grad():
+                if old_proj.weight.shape[1] > in_dim:
+                    self.patch_embed.proj.weight.data[:, :in_dim, :, :] = old_proj.weight.data[:, :in_dim, :, :]
+                else:
+                    self.patch_embed.proj.weight.data = old_proj.weight.data.repeat(1, in_dim // old_proj.weight.shape[1] + 1, 1, 1)[:, :in_dim, :, :]
+                self.patch_embed.proj.bias.data = old_proj.bias.data
+        
+        # Continue with original implementation
         x = self.patch_embed(x)
+        
+        # Add pos embed w/o cls token
+        x = x + self.pos_embed[:, 1:, :]
+
+        # Masking
         if masks is not None:
             x = torch.where(masks.unsqueeze(-1), self.mask_token.to(x.dtype).unsqueeze(0), x)
 
-        x = torch.cat((self.cls_token.expand(x.shape[0], -1, -1), x), dim=1)
-        x = x + self.interpolate_pos_encoding(x, w, h)
-
-        if self.register_tokens is not None:
-            x = torch.cat(
-                (
-                    x[:, :1],
-                    self.register_tokens.expand(x.shape[0], -1, -1),
-                    x[:, 1:],
-                ),
-                dim=1,
-            )
+        # append cls token
+        cls_token = self.cls_token + self.pos_embed[:, :1, :]
+        cls_tokens = cls_token.expand(B, -1, -1)
+        x = torch.cat((cls_tokens, x), dim=1)
 
         return x
 
@@ -326,6 +348,56 @@ class DinoVisionTransformer(nn.Module):
             return ret
         else:
             return self.head(ret["x_norm_clstoken"])
+
+    def load_pretrained_weights(self, pretrained_path):
+        """Load pretrained DINOv2 weights and handle key matching"""
+        state_dict = torch.load(pretrained_path, map_location='cpu')
+        if 'state_dict' in state_dict:
+            state_dict = state_dict['state_dict']
+            
+        # Handle img_size and patch_size which could be int or tuple
+        img_size = self.patch_embed.img_size
+        patch_size = self.patch_embed.patch_size
+
+        # Convert to integers if they're tuples
+        if isinstance(img_size, tuple):
+            img_h, img_w = img_size
+        else:
+            img_h = img_w = img_size
+            
+        if isinstance(patch_size, tuple):
+            patch_h, patch_w = patch_size
+        else:
+            patch_h = patch_w = patch_size
+
+        # Calculate number of patches
+        num_patches = (img_h // patch_h) * (img_w // patch_w)
+
+        # Fix position embedding
+        from utils.util import fix_pos_embed
+        state_dict = fix_pos_embed(
+            state_dict, 
+            self.state_dict(),
+            num_patches
+        )
+
+        # Load weights
+        msg = self.load_state_dict(state_dict, strict=False)
+        print(f"Loaded pretrained weights from {pretrained_path}")
+        print(f"Loading message: {msg}")
+
+    def _hook_before_iter(self):
+        """Hook to be called before each iteration"""
+        assert self.training, "_hook_before_iter should be called at training time only, after train() is called"
+        count = 0
+        for module in self.modules():
+            if isinstance(module, nn.BatchNorm2d):
+                if module.weight.requires_grad == False:
+                    module.eval()
+                    count += 1
+
+        if count > 0:
+            print("Warning: detected at least one frozen BN, set them to eval state. Count:", count)
 
 
 def init_weights_vit_timm(module: nn.Module, name: str = ""):

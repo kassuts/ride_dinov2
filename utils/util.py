@@ -101,13 +101,35 @@ class MetricTracker:
         self.step = None
 
     def update(self, key, value, n=1):
-        if isinstance(value, tuple) and len(value) == 2:
-            value, n = value
+        # Handle tuple case with more safeguards
+        if isinstance(value, tuple):
+            if len(value) == 2:
+                # Ensure both values are scalar numbers before unpacking
+                if not isinstance(value[1], (tuple, list)):
+                    val, count = value
+                    value, n = val, count
+                else:
+                    # Just take the first element if second element is not usable as a count
+                    value = value[0]
+                
+        # Extra safeguard - ensure value is a scalar
+        if isinstance(value, (tuple, list)):
+            value = value[0]
+        
+        # Make sure n is a number
+        if not isinstance(n, (int, float)):
+            n = 1
+        
         if self.writer is not None:
             self.writer.log_metrics({key: value}, step=self.step)
-        self._data.total[key] += value * n
-        self._data.counts[key] += n
-        self._data.average[key] = self._data.total[key] / self._data.counts[key]
+        
+        # Make sure value is a numeric type before multiplying
+        if isinstance(value, (int, float)):
+            self._data.total[key] += value * n
+            self._data.counts[key] += n
+            self._data.average[key] = self._data.total[key] / self._data.counts[key]
+        else:
+            print(f"Warning: Skipping non-numeric value for key {key}: {value}")
 
     def avg(self, key):
         return self._data.average[key]

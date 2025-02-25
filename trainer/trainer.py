@@ -48,7 +48,7 @@ class Trainer(BaseTrainer):
             self.scaler = None
 
         self.valid_data_loader = valid_data_loader
-        self.do_validation = self.config['trainer'].get('validate', False) and (self.valid_data_loader is not None)
+        self.do_validation = self.config['trainer'].get('validate', True) and (self.valid_data_loader is not None)
         self.lr_scheduler = lr_scheduler
         self.log_step = int(np.sqrt(data_loader.batch_size))
         self.save_imgs = save_imgs
@@ -99,7 +99,8 @@ class Trainer(BaseTrainer):
             self.criterion._hook_before_epoch(epoch)
 
         current_combiner = self._get_combiner(epoch)
-        current_combiner.update(epoch)
+        if current_combiner:  # Only update if combiner exists
+            current_combiner.update(epoch)
 
         for batch_idx, data in enumerate(self.data_loader):
             data, target = data
@@ -108,9 +109,29 @@ class Trainer(BaseTrainer):
             self.optimizer.zero_grad()
 
             with autocast():
-                result, loss_dict, acc = current_combiner.forward(
-                    self.model, self.criterion, data, target,
-                )
+                # Ensure data is passed correctly to model
+                if hasattr(self.model, 'base_model'):  # For LoRA models
+                    result = self.model(data)
+                    if isinstance(result, dict):
+                        output = result["output"] if "output" in result else result
+                    else:
+                        output = result
+                    loss = self.criterion(output, target)
+                    loss_dict = {'loss': loss}
+                    acc = self.metric_ftns[0](output, target, return_length=True) if self.metric_ftns else (0, 0)
+                elif current_combiner:  # Use combiner for standard training
+                    result, loss_dict, acc = current_combiner.forward(
+                        self.model, self.criterion, data, target,
+                    )
+                else:  # No combiner case
+                    result = self.model(data)
+                    if isinstance(result, dict):
+                        output = result["output"] if "output" in result else result
+                    else:
+                        output = result
+                    loss = self.criterion(output, target)
+                    loss_dict = {'loss': loss}
+                    acc = self.metric_ftns[0](output, target, return_length=True) if self.metric_ftns else (0, 0)
 
             loss = loss_dict['loss']
             if not use_fp16:

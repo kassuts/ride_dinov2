@@ -1,36 +1,35 @@
 {
-    "name": "Imbalance_CIFAR10LT_IR10_DINOv2",
+    "name": "Imbalance_CIFAR10LT_IR10_DINOv2_LoRA",
     "n_gpu": 1,
 
     "arch": {
         "type": "DINOv2Model",
         "args": {
-            "img_size": 518,
+            "img_size": 224,
             "patch_size": 14,
             "num_classes": 10,
             "returns_feat": true,
             "num_experts": 1,
-            "pretrained_path": "/Users/eitankassuto/Downloads/dinov2_vits14_pretrain.pth" 
+            "embed_dim": 384,
+            "pretrained_path": "/Users/eitankassuto/Downloads/dinov2_vits14_pretrain.pth"
         }
     },
     "data_loader": {
         "type": "ImbalanceCIFAR10DataLoader",
         "args":{
             "data_dir": "./data/CIFAR-10",
-            "batch_size": 16,
+            "batch_size": 32,
             "shuffle": true,
             "num_workers": 4,
             "imb_factor": 0.1,
-            "randaugm": false
+            "resize_size": 224
         }
     },
     "optimizer": {
-        "type": "SGD",
+        "type": "AdamW",
         "args":{
-            "lr": 0.1,
-            "weight_decay": 5e-4,
-            "momentum": 0.9,
-            "nesterov": true
+            "lr": 1e-3,
+            "weight_decay": 0.01
         }
     },
     "add_extra_info": true,
@@ -46,20 +45,31 @@
         "accuracy"
     ],
     "lr_scheduler": {
-        "type": "CustomLR",
+        "type": "CosineAnnealingLR",
         "args": {
-            "step1": 160,
-            "step2": 180,
-            "gamma": 0.1,
-            "warmup_epoch": 5
+            "T_max": 100,
+            "eta_min": 1e-6
         }
     },
     "trainer": {
-        "epochs": 200, 
-        "save_dir": "saved/cifar10/ir10/bs_e200_tau1.0_bs128_lr0.1",
-        "save_period": 100,
-        "verbosity": 2, 
-        "monitor": "max val_accuracy"
+        "epochs": 100,
+        "save_dir": "saved/cifar10/ir10/lora_finetuning",
+        "save_period": 10,
+        "verbosity": 2,
+        "monitor": "max val_accuracy",
+        "validate": true
+    },
+    "lora": {
+        "rank": 8,
+        "alpha": 16,
+        "dropout": 0.1,
+        "target_modules": [
+            "attn.qkv",
+            "attn.proj",
+            "mlp.fc1",
+            "mlp.fc2"
+        ],
+        "bias": "none"
     },
     "combiner": {
         "type": "Combiner",
@@ -68,4 +78,4 @@
             "alpha": 0.8
         }
     }
-}
+} 
